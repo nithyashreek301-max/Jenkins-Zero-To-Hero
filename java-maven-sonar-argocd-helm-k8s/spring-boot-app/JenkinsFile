@@ -1,52 +1,69 @@
 pipeline {
-  agent any  // use default agent, no docker
+    agent any  // use default agent, no Docker agent
 
-  environment {
-    SONAR_URL = "http://host.docker.internal:9000" // SonarQube on host
-    DOCKER_IMAGE = "nithyaceo/demo-app:${BUILD_NUMBER}"
-  }
-
-  stages {
-    stage('Checkout') {
-      steps {
-        git branch: 'main', url: 'https://github.com/nithyashreek301-max/Jenkins-Zero-To-Hero.git'
-      }
+    environment {
+        SONAR_URL = "http://host.docker.internal:9000"  // SonarQube on Windows host
+        DOCKER_IMAGE = "nithyaceo/demo-app:${BUILD_NUMBER}"
     }
 
-    stage('Build and Test') {
-      steps {
-        dir('java-maven-sonar-argocd-helm-k8s/spring-boot-app') {
-          sh 'mvn clean package'
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/nithyashreek301-max/Jenkins-Zero-To-Hero.git'
+            }
         }
-      }
-    }
 
-    stage('Static Code Analysis') {
-      steps {
-        withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
-          dir('java-maven-sonar-argocd-helm-k8s/spring-boot-app') {
-            sh "mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=${SONAR_URL}"
-          }
+        stage('Build and Test') {
+            steps {
+                dir('java-maven-sonar-argocd-helm-k8s/spring-boot-app') {
+                    sh "mvn clean package"
+                }
+            }
         }
-      }
-    }
 
-    stage('Build and Push Docker Image') {
-      steps {
-        dir('java-maven-sonar-argocd-helm-k8s/spring-boot-app') {
-          sh '''
-            docker build -t ${DOCKER_IMAGE} .
-            docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
-            docker push ${DOCKER_IMAGE}
-          '''
+        stage('Static Code Analysis') {
+            steps {
+                withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
+                    dir('java-maven-sonar-argocd-helm-k8s/spring-boot-app') {
+                        sh "mvn sonar:sonar -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.host.url=${SONAR_URL}"
+                    }
+                }
+            }
         }
-      }
+
+        stage('Build and Push Docker Image') {
+            steps {
+                dir('java-maven-sonar-argocd-helm-k8s/spring-boot-app') {
+                    // Build and push using host Docker
+                    withCredentials([usernamePassword(credentialsId: 'docker-cred', passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+                        sh "docker build -t ${DOCKER_IMAGE} ."
+                        sh "docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD"
+                        sh "docker push ${DOCKER_IMAGE}"
+                    }
+                }
+            }
+        }
+
+        stage('Update Deployment File') {
+            steps {
+                withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
+                    sh """
+                        git config user.email "nithy.xyz@gmail.com"
+                        git config user.name "Nithyashree"
+                        sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+                        git add java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+                        git diff --quiet || git commit -m "Update deployment image to version ${BUILD_NUMBER}"
+                        git push https://${GITHUB_TOKEN}@github.com/nithyashreek301-max/Jenkins-Zero-To-Hero HEAD:main
+                    """
+                }
+            }
+        }
     }
 
-    stage('Update Deployment File') {
-      steps {
-        withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
-          sh '''
-            git config user.email "nithy.xyz@gmail.com"
-            git config user.name "Nithyashree"
-            sed -i "s/replaceImageTag/${BUILD_NUMBER}/g" java-maven-sonar-argocd-helm-k8s/spring-boot-app-manifests/deployment.yml
+    post {
+        always {
+            echo "Pipeline finished."
+        }
+    }
+}
